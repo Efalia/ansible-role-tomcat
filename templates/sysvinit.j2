@@ -1,0 +1,96 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          {{ service_name }}
+# Required-Start:    $network $remote_fs $syslog
+# Required-Stop:     $network $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: {{ service_name }}
+# Description:       Gestion de Tomcat (start/stop/status)
+### END INIT INFO
+
+NAME="{{ service_name }}"
+USER="{{ service_user }}"
+CMD="{{ service_start_command }}"
+PIDFILE="/var/run/${NAME}.pid"
+LOCKFILE="/var/lock/subsys/${NAME}"
+
+# Lib fonctions (RHEL)
+[ -f /etc/init.d/functions ] && . /etc/init.d/functions
+
+is_running() {
+  [ -f "$PIDFILE" ] || return 1
+  pid="$(cat "$PIDFILE" 2>/dev/null)" || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+start() {
+  if is_running; then
+    echo "$NAME est déjà démarré (pid $(cat "$PIDFILE"))."
+    return 0
+  fi
+
+  echo -n "Démarrage de $NAME: "
+  # Lance la commande en tant que USER, récupère le PID côté root, écrit le PIDFILE en root
+  pid="$(su -s /bin/sh "$USER" -c "sh -c '$CMD >/dev/null 2>&1 & echo \$!'" 2>/dev/null)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    echo "$pid" > "$PIDFILE"
+    [ -d "$(dirname "$LOCKFILE")" ] || mkdir -p "$(dirname "$LOCKFILE")"
+    touch "$LOCKFILE" 2>/dev/null || true
+    [ -n "$success" ] && success || echo "OK"
+    echo
+    return 0
+  else
+    [ -n "$failure" ] && failure || echo "FAILED"
+    echo
+    return 1
+  fi
+}
+
+stop() {
+  if ! is_running; then
+    echo "$NAME est déjà arrêté."
+    rm -f "$PIDFILE" "$LOCKFILE"
+    return 0
+  fi
+
+  pid="$(cat "$PIDFILE")"
+  echo -n "Arrêt de $NAME (pid $pid): "
+  kill "$pid" 2>/dev/null || true
+
+  # Attente jusqu'à 30s
+  timeout=30
+  while [ $timeout -gt 0 ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    timeout=$((timeout - 1))
+  done
+
+  if kill -0 "$pid" 2>/dev/null; then
+    echo -n "forçage... "
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+
+  rm -f "$PIDFILE" "$LOCKFILE"
+  [ -n "$success" ] && success || echo "OK"
+  echo
+  return 0
+}
+
+status() {
+  if is_running; then
+    echo "$NAME est en cours d'exécution (pid $(cat "$PIDFILE"))."
+    return 0
+  fi
+  echo "$NAME n'est pas en cours d'exécution."
+  return 3
+}
+
+case "$1" in
+  start) start ;;
+  stop) stop ;;
+  restart|force-reload) stop; start ;;
+  status) status ;;
+  *) echo "Usage: $0 {start|stop|status|restart|force-reload}"; exit 1 ;;
+esac
+
+exit $?
